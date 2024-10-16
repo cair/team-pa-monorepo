@@ -1,15 +1,11 @@
-import argparse
 import logging
-import numpy as np
-import cv2
-from tqdm import tqdm
-from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
-from skimage.filters import threshold_otsu
-import matplotlib.pyplot as plt
+import os
 from pathlib import Path
-from typing import Dict
 
-from tmu.data import TMUDataset
+from dotenv import load_dotenv
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
+import matplotlib.pyplot as plt
 from tmu.composite.callbacks.base import TMCompositeCallback
 from tmu.composite.composite import TMComposite
 from tmu.composite.components.adaptive_thresholding import AdaptiveThresholdingComponent
@@ -17,90 +13,30 @@ from tmu.composite.components.color_thermometer_scoring import ColorThermometerC
 from tmu.composite.components.histogram_of_gradients import HistogramOfGradientsComponent
 from tmu.composite.config import TMClassifierConfig
 from tmu.models.classification.vanilla_classifier import TMClassifier
+from data.nkom_dataloader import NKOMDataset
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants
-IMG_SIZE = (100, 100)
-CLASSES = {'jam': 0, 'unintent_jam': 1}
 CURRENT_DIR = Path(__file__).parent.absolute()
-DATA_DIR = CURRENT_DIR / 'data-split'
-CACHE_DIR = CURRENT_DIR / 'cache'
 
-class NKOMDataset(TMUDataset):
-    def __init__(self):
-        super().__init__()
-        self.data_dir = DATA_DIR
-        self.cache_dir = CACHE_DIR
-        self.cache_dir.mkdir(exist_ok=True)
-        self.img_size = IMG_SIZE
-        self.classes = CLASSES
+class Settings(BaseSettings):
+    experiment_type: str = "nkom"
+    platform: str = "CPU"
+    epochs: int = 30
+    num_clauses: int = 100
+    t_parameter: int = 500
+    image_width: int = 100
+    image_height: int = 100
+    data_dir: str = "data-split"
+    cache_dir: str = "cache"
 
-    def _retrieve_dataset(self) -> Dict[str, np.ndarray]:
-        train_data = self._load_or_process_data('train')
-        val_data = self._load_or_process_data('val')
-        test_data = self._load_or_process_data('test')
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_prefix=""
+    )
 
-        return {
-            'x_train': train_data[0],
-            'y_train': train_data[1],
-            'x_val': val_data[0],
-            'y_val': val_data[1],
-            'x_test': test_data[0],
-            'y_test': test_data[1]
-        }
-
-    def _transform(self, name: str, dataset: np.ndarray) -> np.ndarray:
-        if name.startswith('y'):
-            return dataset.astype(np.uint32)
-        return dataset #self._convert_to_binary(dataset).astype(np.uint32)
-
-    def _load_or_process_data(self, split: str):
-        cache_file_X = self.cache_dir / f'{split}_data_X.npy'
-        cache_file_y = self.cache_dir / f'{split}_data_y.npy'
-
-        if cache_file_X.exists() and cache_file_y.exists():
-            logger.info(f"Loading cached data from {cache_file_X} and {cache_file_y}")
-            with cache_file_X.open('rb') as fx, cache_file_y.open('rb') as fy:
-                X = np.load(fx)
-                y = np.load(fy)
-        else:
-            logger.info(f"Processing data from {self.data_dir / split}")
-            X, y = self._load_and_preprocess_data(self.data_dir / split)
-            
-            logger.info(f"Saving processed data to {cache_file_X} and {cache_file_y}")
-            with cache_file_X.open('wb') as fx, cache_file_y.open('wb') as fy:
-                np.save(fx, X)
-                np.save(fy, y)
-
-        return X, y
-
-    def _load_and_preprocess_data(self, data_dir: Path):
-        X, y = [], []
-        for class_name, label in self.classes.items():
-            class_dir = data_dir / class_name
-            for img_path in tqdm(list(class_dir.glob('*')), desc=f"Loading {class_name}"):
-                img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
-                img = cv2.resize(img, self.img_size)
-                X.append(img)
-            
-                y.append(label)
-        
-        # Reshape X to (samples, dim1, dim2, depth)
-        X = np.array(X).reshape(-1, self.img_size[0], self.img_size[1], 1)
-        y = np.array(y)
-    
-        return X, y
-
-    def _convert_to_binary(self, X_images):
-        binary_images = []
-        for image in X_images:
-            threshold = threshold_otsu(image.squeeze())  # Remove the channel dimension for Otsu
-            binary = (image > threshold).astype(np.uint32)
-            binary_images.append(binary)
-        return np.array(binary_images)
-    
 def plot_accuracy(train_acc, val_acc, test_acc, output_path):
     plt.figure(figsize=(10, 6))
     plt.plot(train_acc, label='Train Accuracy')
@@ -113,34 +49,34 @@ def plot_accuracy(train_acc, val_acc, test_acc, output_path):
     plt.savefig(output_path)
     logger.info(f"Accuracy plot saved to {output_path}")
 
-def run_nkom_experiment(args, data):
+def run_nkom_experiment(config: Settings, data):
     # Train and evaluate model
-    num_clauses, T, epochs = args.num_clauses, args.T, args.epochs
+    num_clauses, T, epochs = config.num_clauses, config.t_parameter, config.epochs
     logger.info(f"Training model with {num_clauses} clauses, T={T}, and {epochs} epochs")
-    
+
     tm = TMClassifier(
         number_of_clauses=num_clauses,
         T=T,
         s=5.0,
         patch_dim=(20, 20),
         max_included_literals=32,
-        platform=args.platform,
+        platform=config.platform,
         weighted_clauses=True
     )
-    
+
     train_acc_history, val_acc_history, test_acc_history = [], [], []
-    
+
     for epoch in range(epochs):
         tm.fit(data['x_train'], data['y_train'], epochs=1, incremental=True)
-        
+
         train_acc = 100 * accuracy_score(data['y_train'], tm.predict(data['x_train']))
         val_acc = 100 * accuracy_score(data['y_val'], tm.predict(data['x_val']))
         test_acc = 100 * accuracy_score(data['y_test'], tm.predict(data['x_test']))
-        
+
         train_acc_history.append(train_acc)
         val_acc_history.append(val_acc)
         test_acc_history.append(test_acc)
-        
+
         # Final evaluation
         y_pred = tm.predict(data['x_test'])
         cm = confusion_matrix(data['y_test'], y_pred)
@@ -148,7 +84,7 @@ def run_nkom_experiment(args, data):
         precision = precision_score(data['y_test'], y_pred)
         recall = recall_score(data['y_test'], y_pred)
         f1 = f1_score(data['y_test'], y_pred)
-        
+
         log_message = (
             f"Epoch {epoch+1}:\n"
             f"Train Acc: {train_acc:.2f}%, Val Acc: {val_acc:.2f}%, Test Acc: {test_acc:.2f}%\n"
@@ -163,7 +99,7 @@ def run_nkom_experiment(args, data):
     # Plot accuracy
     plot_accuracy(train_acc_history, val_acc_history, test_acc_history, CURRENT_DIR / 'nkom_accuracy_plot.png')
 
-def run_composite_experiment(args, data):
+def run_composite_experiment(config: Settings, data):
     checkpoint_path = Path("checkpoints")
     checkpoint_path.mkdir(exist_ok=True)
 
@@ -191,23 +127,23 @@ def run_composite_experiment(args, data):
         components=[
             AdaptiveThresholdingComponent(TMClassifier, TMClassifierConfig(
                 number_of_clauses=2000, T=500, s=10.0, max_included_literals=32,
-                platform=args.platform, weighted_clauses=True, patch_dim=(10, 10),
-            ), epochs=args.epochs),
+                platform=config.platform, weighted_clauses=True, patch_dim=(10, 10),
+            ), epochs=config.epochs),
 
             ColorThermometerComponent(TMClassifier, TMClassifierConfig(
                 number_of_clauses=2000, T=1500, s=2.5, max_included_literals=32,
-                platform=args.platform, weighted_clauses=True, patch_dim=(3, 3),
-            ), resolution=8, epochs=args.epochs),
+                platform=config.platform, weighted_clauses=True, patch_dim=(3, 3),
+            ), resolution=8, epochs=config.epochs),
 
             ColorThermometerComponent(TMClassifier, TMClassifierConfig(
                 number_of_clauses=2000, T=1500, s=2.5, max_included_literals=32,
-                platform=args.platform, weighted_clauses=True, patch_dim=(4, 4),
-            ), resolution=8, epochs=args.epochs),
+                platform=config.platform, weighted_clauses=True, patch_dim=(4, 4),
+            ), resolution=8, epochs=config.epochs),
 
             HistogramOfGradientsComponent(TMClassifier, TMClassifierConfig(
                 number_of_clauses=2000, T=50, s=10.0, max_included_literals=32,
-                platform=args.platform, weighted_clauses=False
-            ), epochs=args.epochs)
+                platform=config.platform, weighted_clauses=False
+            ), epochs=config.epochs)
         ],
         use_multiprocessing=False
     )
@@ -229,22 +165,32 @@ def run_composite_experiment(args, data):
         logger.info(f"{k} Accuracy: {comp_acc:.1f}%")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Tsetlin Machine experiments")
-    parser.add_argument("--experiment", choices=["nkom", "composite"], required=True, help="Type of experiment to run")
-    parser.add_argument("--platform", default="CPU", type=str, help="Platform to run on (CPU or CUDA)")
-    parser.add_argument("--epochs", default=30, type=int, help="Number of epochs")
-    parser.add_argument("--num_clauses", default=100, type=int, help="Number of clauses (for NKOM experiment)")
-    parser.add_argument("--T", default=500, type=int, help="T parameter (for NKOM experiment)")
-    
-    args = parser.parse_args()
+    # Load environment variables
+    load_dotenv()
+
+    # Load settings
+    config = Settings()
+
+    # Constants
+    image_dimensions = (config.image_width, config.image_height)
+    classes = {'jam': 0, 'unintent_jam': 1}
+    data_dir = CURRENT_DIR / config.data_dir
+    cache_dir = CURRENT_DIR / config.cache_dir
 
     # Load data using the custom NKOMDataset
-    data = NKOMDataset().get()
-    
-    if args.experiment == "nkom":
-        run_nkom_experiment(args, data)
-    elif args.experiment == "composite":
-        run_composite_experiment(args, data)
+    data = NKOMDataset(
+        data_dir=data_dir,
+        cache_dir=cache_dir,
+        img_size=image_dimensions,
+        classes=classes
+    ).get()
+
+    if config.experiment_type == "nkom":
+        run_nkom_experiment(config, data)
+    elif config.experiment_type == "composite":
+        run_composite_experiment(config, data)
+    else:
+        print(f"Unknown experiment type: {config.experiment_type}")
 
 if __name__ == "__main__":
     main()

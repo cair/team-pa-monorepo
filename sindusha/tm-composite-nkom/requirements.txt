@@ -1,9 +1,0 @@
-numpy
-opencv-python-headless
-tqdm
-scikit-learn
-scikit-image
-matplotlib
-pyTsetlinMachine
-tensorflow
-loguru

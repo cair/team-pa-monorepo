@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nkom-project"
+dynamic = ["version"]
+description = "NKOM Project using Tsetlin Machine"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "numpy",
+    "opencv-python-headless",
+    "tqdm",
+    "scikit-learn",
+    "scikit-image",
+    "matplotlib",
+    "pyTsetlinMachine",
+    "tensorflow",
+    "loguru",
+    "tmu",
+    "pydantic",
+    "pydantic_settings",
+    "python-dotenv"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+    "flake8",
+]
+
+[project.urls]
+Homepage = "https://github.com/cair/team-pa-monorepo"
+Repository = "https://github.com/cair/team-pa-monorepo"
+"Bug Tracker" = "https://github.com/cair/team-pa-monorepo/issues"
+
+[tool.setuptools]
+packages = ["src.tm_composite_nkom"]
+
+
+[tool.setuptools_scm]
+root = "../.."
+write_to = "sindusha/tm-composite-nkom/src/tm_composite_nkom/_version.py"
+
+[tool.black]
+line-length = 100
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
