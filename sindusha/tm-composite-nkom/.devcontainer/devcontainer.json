@@ -1,0 +1,17 @@
+{
+    "name": "ML GPU Environment",
+    "dockerFile": "../Dockerfile",
+    "runArgs": [
+        "--gpus",
+        "all"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-toolsai.jupyter"
+            ]
+        }
+    },
+    "remoteUser": "root"
+}
