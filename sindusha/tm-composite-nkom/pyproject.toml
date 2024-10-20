@@ -36,7 +36,8 @@ dependencies = [
     "tmu",
     "pydantic",
     "pydantic_settings",
-    "python-dotenv"
+    "python-dotenv",
+    "pycuda"
 ]
 
 [project.optional-dependencies]
