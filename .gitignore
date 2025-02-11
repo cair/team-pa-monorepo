@@ -1,0 +1,15 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+checkpoints
+datasets
+logs
+results
+src/tm_composite_nkom/checkpoints
+src/tm_composite_nkom/datasets
+src/tm_composite_nkom/logs

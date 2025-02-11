@@ -10,8 +10,8 @@ from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, r
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-from tm_composite_nkom.filters.functions import FlexibleComponent, CompositePreprocessor, RotationPreprocessor, \
-    OtsuThresholdingPreprocessor, HistogramEqualizationPreprocessor, GaussianBlurPreprocessor, SobelEdgePreprocessor, \
+from filters.functions import FlexibleComponent, OtsuThresholdingPreprocessor, CompositePreprocessor, RotationPreprocessor, \
+    HistogramEqualizationPreprocessor, GaussianBlurPreprocessor, SobelEdgePreprocessor, \
     LaplacianEdgePreprocessor, BilateralFilterPreprocessor, AdaptiveThresholdingPreprocessor, CannyEdgePreprocessor, \
     FrequencyBandThresholdingPreprocessor, PeakDetectionPreprocessor, SpectralContrastEnhancementPreprocessor, \
     TimeFrequencyEdgeDetectionPreprocessor, HarmonicStructureEnhancementPreprocessor, \
@@ -19,6 +19,7 @@ from tm_composite_nkom.filters.functions import FlexibleComponent, CompositePrep
 
 CURRENT_DIR = Path(__file__).parent.absolute()
 
+from tm_composite_nkom.data.sindusha_dataloader import SindushaDataset
 from tmu.composite.callbacks.base import TMCompositeCallback
 from tmu.composite.components.base import TMComponent
 from tmu.composite.composite import TMComposite
@@ -34,18 +35,18 @@ logger = logging.getLogger(__name__)
 class ExperimentType(str):
     nkom = "nkom"
     composite = "composite"
-
+    sindusha = "sindusha"
 
 
 class Settings(BaseSettings):
-    experiment_type: str = ExperimentType.composite
-    platform: str = "CPU"
-    epochs: int = 1
+    experiment_type: str = ExperimentType.sindusha
+    platform: str = "CUDA"
+    epochs: int = 100
     num_clauses: int = 100
     t_parameter: int = 500
     image_width: int = 100
     image_height: int = 100
-    data_dir: str = "data-split"
+    data_dir: str = "datasets/jamming_hard"
     cache_dir: str = "cache"
     train_percentage: Optional[float] = None  # New parameter
 
@@ -54,6 +55,102 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix=""
     )
+
+
+
+
+class TMCompositeCheckpointCallback(TMCompositeCallback):
+    def __init__(self, component_path: Path, data_test: Dict[str, Any]):
+        super().__init__()
+        self.component_path = component_path
+        self.progress_bars = {}
+        self.component_id_names = {}
+        self.component_accuracies = {}
+        self.data_test = data_test
+        self.reported_epochs = {}  # Track which epochs have been reported
+
+    def on_train_composite_begin(self, composite, logs=None, **kwargs):
+        for i, component in enumerate(composite.components):
+            component_str = str(component)
+            self.reported_epochs[component.uuid] = set()  # Initialize empty set for this component
+            self.progress_bars[component.uuid] = tqdm(
+                total=component.epochs,
+                desc=self._get_description(component, 0),
+                position=i,
+                leave=True
+            )
+            self.component_id_names[component.uuid] = f"Component {i}: {component_str}"
+            self.component_accuracies[component.uuid] = 0.0
+
+        # Add an overall progress bar
+        total_epochs = sum(component.epochs for component in composite.components)
+        self.progress_bars['overall'] = tqdm(
+            total=total_epochs,
+            desc="Overall Progress",
+            position=len(composite.components),
+            leave=True
+        )
+
+    def on_epoch_component_begin(self, component, epoch, logs=None, **kwargs):
+        pbar = self.progress_bars.get(component.uuid)
+        if pbar:
+            pbar.set_description(self._get_description(component, epoch + 1))
+
+
+    def on_epoch_component_end(self, component: TMComponent, epoch: int, logs: Dict = dict(), **kwargs) -> None:
+        # Skip if we've already reported this epoch for this component
+        if epoch in self.reported_epochs.get(component.uuid, set()):
+            return
+
+        component.save(self.component_path / f"{component}-{epoch}.pkl")
+
+        pbar = self.progress_bars.get(component.uuid)
+        if pbar:
+            # Update accuracy every 15 epochs
+            if epoch == 100:
+                model = component.model_instance
+                y_pred = model.predict(self.data_test['X'])
+                y_true = self.data_test['Y'].flatten()
+                acc = 100 * (y_pred == y_true).mean()
+                self.component_accuracies[component.uuid] = acc
+
+            # Update progress bar
+            pbar.update(1)
+            pbar.set_description(self._get_description(component, epoch + 1))
+            pbar.refresh()
+
+        # Update overall progress
+        overall_pbar = self.progress_bars.get('overall')
+        if overall_pbar:
+            overall_pbar.update(1)
+            overall_pbar.refresh()
+
+        # Mark this epoch as reported
+        if component.uuid not in self.reported_epochs:
+            self.reported_epochs[component.uuid] = set()
+        self.reported_epochs[component.uuid].add(epoch)
+
+    def on_train_composite_end(self, composite, logs=None, **kwargs):
+        print("\nTraining completed. Final component accuracies:")
+        for component in composite.components:
+            accuracy = self.component_accuracies.get(component.uuid, 0.0)
+            print(f"{self.component_id_names[component.uuid]}: {accuracy:.1f}%")
+
+        # Uncomment the following lines if you want to close the progress bars
+        # for pbar in self.progress_bars.values():
+        #     pbar.close()
+        # print("\n" * (len(self.progress_bars) + 1))  # Move cursor below all progress bars
+
+    def _get_description(self, component: TMComponent, current_epoch: int) -> str:
+        if component.uuid not in self.component_accuracies:
+            self.component_accuracies[component.uuid] = 0.0
+        accuracy = self.component_accuracies[component.uuid]
+        component_str = str(component)
+        return f"{component_str} - Epoch {current_epoch}/{component.epochs} - Acc: {accuracy:.1f}%"
+
+
+
+
 
 def plot_accuracy(train_acc: List[float], val_acc: List[float], test_acc: List[float], output_path: Path) -> None:
     plt.figure(figsize=(10, 6))
@@ -67,7 +164,7 @@ def plot_accuracy(train_acc: List[float], val_acc: List[float], test_acc: List[f
     plt.savefig(output_path)
     logger.info(f"Accuracy plot saved to {output_path}")
 
-def run_nkom_experiment(config: Settings, data: Dict[str, np.ndarray[np.uint32]]) -> None:
+def run_nkom_experiment(config: Settings, data: Dict[str, np.ndarray[Any, np.dtype[np.uint32]]]) -> None:
 
     logger.info(f"Training model with {config.num_clauses} clauses, T={config.t_parameter}, and {config.epochs} epochs")
 
@@ -110,9 +207,9 @@ def run_nkom_experiment(config: Settings, data: Dict[str, np.ndarray[np.uint32]]
         val_acc = 100 * accuracy_score(data['y_val'], y_pred_val)
         test_acc = 100 * accuracy_score(data['y_test'], y_pred)
 
-        train_acc_history.append(train_acc)
-        val_acc_history.append(val_acc)
-        test_acc_history.append(test_acc)
+        train_acc_history.append(float(train_acc))
+        val_acc_history.append(float(val_acc))
+        test_acc_history.append(float(test_acc))
 
 
         cm = confusion_matrix(data['y_test'], y_pred)
@@ -169,82 +266,6 @@ def run_composite_experiment(config: Settings, dataset: Dict[str, np.ndarray]) -
     data_train = dict(X=dataset['x_train'], Y=dataset['y_train'])
     data_test = dict(X=dataset['x_test'], Y=dataset['y_test'])
 
-    class TMCompositeCheckpointCallback(TMCompositeCallback):
-        def __init__(self, component_path: Path, data_test: Dict[str, Any]):
-            super().__init__()
-            self.component_path = component_path
-            self.progress_bars = {}
-            self.component_id_names = {}
-            self.component_accuracies = {}
-            self.data_test = data_test
-
-        def on_train_composite_begin(self, composite, logs=None, **kwargs):
-            for i, component in enumerate(composite.components):
-                component_str = str(component)
-                self.progress_bars[component.uuid] = tqdm(
-                    total=component.epochs,
-                    desc=self._get_description(component, 0),
-                    position=i,
-                    leave=True
-                )
-                self.component_id_names[component.uuid] = f"Component {i}: {component_str}"
-                self.component_accuracies[component.uuid] = 0.0
-
-            # Add an overall progress bar
-            total_epochs = sum(component.epochs for component in composite.components)
-            self.progress_bars['overall'] = tqdm(
-                total=total_epochs,
-                desc="Overall Progress",
-                position=len(composite.components),
-                leave=True
-            )
-
-        def on_epoch_component_begin(self, component, epoch, logs=None, **kwargs):
-            pbar = self.progress_bars.get(component.uuid)
-            if pbar:
-                pbar.set_description(self._get_description(component, epoch + 1))
-
-        def on_epoch_component_end(self, component: TMComponent, epoch: int, logs: Dict = None, **kwargs) -> None:
-            component.save(self.component_path / f"{component}-{epoch}.pkl")
-
-            pbar = self.progress_bars.get(component.uuid)
-            if pbar:
-                # Update accuracy every 15 epochs
-                if epoch == 100:
-                    model = component.model_instance
-                    y_pred = model.predict(self.data_test['X'])
-                    y_true = self.data_test['Y'].flatten()
-                    acc = 100 * (y_pred == y_true).mean()
-                    self.component_accuracies[component.uuid] = acc
-
-                # Update progress bar
-                pbar.update(1)
-                pbar.set_description(self._get_description(component, epoch + 1))
-                pbar.refresh()
-
-            # Update overall progress
-            overall_pbar = self.progress_bars.get('overall')
-            if overall_pbar:
-                overall_pbar.update(1)
-                overall_pbar.refresh()
-
-        def on_train_composite_end(self, composite, logs=None, **kwargs):
-            print("\nTraining completed. Final component accuracies:")
-            for component in composite.components:
-                accuracy = self.component_accuracies.get(component.uuid, 0.0)
-                print(f"{self.component_id_names[component.uuid]}: {accuracy:.1f}%")
-
-            # Uncomment the following lines if you want to close the progress bars
-            # for pbar in self.progress_bars.values():
-            #     pbar.close()
-            # print("\n" * (len(self.progress_bars) + 1))  # Move cursor below all progress bars
-
-        def _get_description(self, component: TMComponent, current_epoch: int) -> str:
-            if component.uuid not in self.component_accuracies:
-                self.component_accuracies[component.uuid] = 0.0
-            accuracy = self.component_accuracies[component.uuid]
-            component_str = str(component)
-            return f"{component_str} - Epoch {current_epoch}/{component.epochs} - Acc: {accuracy:.1f}%"
 
 
     # composite_model = TMComposite(
@@ -443,9 +464,9 @@ def run_composite_experiment(config: Settings, dataset: Dict[str, np.ndarray]) -
     # )
 
     # Define the parameter ranges
-    clauses = [100, 200, 300, 500]
-    T_values = [50, 200, 500]
-    s_values = [10.0] # 1.0, 5.0]
+    clauses = [100] #, 200, 300, 500]
+    T_values = [50] #, 200, 500]
+    s_values = [10.0, 5.0] # 1.0, 5.0]
     patch_dims = [(20, 20)]  # (10, 10), (40, 40)
     # Create all combinations of parameters
     param_combinations = list(product(clauses, T_values, s_values, patch_dims))
@@ -473,8 +494,7 @@ def run_composite_experiment(config: Settings, dataset: Dict[str, np.ndarray]) -
     # Create the composite model
     composite_model = TMComposite(
         components=components,
-        use_multiprocessing=False,
-        remove_data_after_preprocess=True
+        use_multiprocessing=True,
     )
 
     composite_model.fit(
@@ -509,7 +529,6 @@ def main() -> None:
     config = Settings()
 
     image_dimensions: Tuple[int, int] = (config.image_width, config.image_height)
-    classes: Dict[str, int] = {'jam': 0, 'unintent_jam': 1}
     data_dir = CURRENT_DIR / config.data_dir
     cache_dir = CURRENT_DIR / config.cache_dir
 
@@ -519,7 +538,7 @@ def main() -> None:
                 data_dir=data_dir,
                 cache_dir=cache_dir,
                 img_size=image_dimensions,
-                classes=classes,
+                classes={'jam': 0, 'unintent_jam': 1},
                 train_percentage=0.8,
                 config_convert_to_binary=True
             ).get()
@@ -530,11 +549,30 @@ def main() -> None:
                 data_dir=data_dir,
                 cache_dir=cache_dir,
                 img_size=image_dimensions,
-                classes=classes,
+                classes={'jam': 0, 'unintent_jam': 1},
                 train_percentage=0.8,
                 config_convert_to_binary=False
             ).get()
 
+            run_composite_experiment(config, data)
+        elif config.experiment_type == "sindusha":
+            dataset = SindushaDataset(
+                data_dir=data_dir,
+                cache_dir=cache_dir,
+                img_size=(100, 100),
+                classes={
+                    'DME': 0,
+                    'NB': 1,
+                    'NoJam': 2,
+                    'SingleAM': 3,
+                    'SingleChirp': 4,
+                    'SingleFM': 5
+                },
+                train_percentage=0.8,
+                config_convert_to_binary=True,
+                val_split=0.1
+            )
+            data = dataset.get()
             run_composite_experiment(config, data)
         else:
             logger.error(f"Unknown experiment type: {config.experiment_type}")

@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/sindusha/tm_composite_nkom/src/tmu_code:${workspaceFolder}/sindusha/tm_composite_nkom/src:${env:PYTHONPATH}"
+            }
+        },
+        {
+            "name": "Python: tm_2.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/sindusha/tm_composite_nkom/src/tm_composite_nkom/tm_2.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/sindusha/tm_composite_nkom/src/tmu_code:${workspaceFolder}/sindusha/tm_composite_nkom/src:${env:PYTHONPATH}"
+            }
+        }
+    ]
+}

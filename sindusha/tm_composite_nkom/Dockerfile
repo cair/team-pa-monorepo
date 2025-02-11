@@ -26,5 +26,5 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # Set the working directory
 WORKDIR /workspace
 
-# Set Python path
-ENV PYTHONPATH "${PYTHONPATH}:/workspace"
+# Set Python path to include src directory
+ENV PYTHONPATH="/workspace/src:${PYTHONPATH}"

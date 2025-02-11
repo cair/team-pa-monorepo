@@ -1,0 +1,20 @@
+numpy
+opencv-python-headless
+tqdm
+scikit-learn
+scikit-image
+matplotlib
+pyTsetlinMachine
+tensorflow
+loguru
+tmu
+pydantic
+pydantic_settings
+python-dotenv
+pycuda
+
+# Development dependencies
+pytest
+black
+isort
+flake8 

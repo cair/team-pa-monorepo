@@ -10,8 +10,16 @@
             "extensions": [
                 "ms-python.python",
                 "ms-toolsai.jupyter"
-            ]
+            ],
+            "settings": {
+                "python.analysis.extraPaths": [
+                    "/workspace/src"
+                ]
+            }
         }
     },
-    "remoteUser": "root"
+    "remoteUser": "root",
+    "remoteEnv": {
+        "PYTHONPATH": "${containerWorkspaceFolder}/src:${containerEnv:PYTHONPATH}"
+    }
 }
