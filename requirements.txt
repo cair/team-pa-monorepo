@@ -17,4 +17,6 @@ pycuda
 pytest
 black
 isort
-flake8 
+flake8
+nvitop
+progressbar2

@@ -2,9 +2,13 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Install Package (Development)",
+            "label": "Clone and Setup TMU",
             "type": "shell",
-            "command": "pip install -e .",
+            "command": "mkdir -p ${workspaceFolder}/sindusha/tm_composite_nkom/src && cd ${workspaceFolder}/sindusha/tm_composite_nkom/src && git clone git@github.com:cair/tmu.git tmu_code && cd tmu_code && pip install -e .",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
             "problemMatcher": []
         },
         {
@@ -24,4 +28,4 @@
             "problemMatcher": []
         }
     ]
-} 
+}

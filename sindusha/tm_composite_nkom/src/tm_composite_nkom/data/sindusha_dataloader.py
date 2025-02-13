@@ -8,20 +8,55 @@ from skimage.filters import threshold_otsu
 from tmu.data import TMUDataset
 from tqdm import tqdm
 import random
+import requests
+import tarfile
+import os
+
 
 class SindushaDatasetError(Exception):
     """Custom exception for Sindusha dataset errors."""
 
+
+def download_with_progress(url: str, dest_path: Path):
+    """Download a file with progress bar."""
+    response = requests.get(url, stream=True)
+    total_size = int(response.headers.get("content-length", 0))
+
+    with open(dest_path, "wb") as file, tqdm(
+        desc=f"Downloading dataset",
+        total=total_size,
+        unit="iB",
+        unit_scale=True,
+        unit_divisor=1024,
+    ) as pbar:
+        for data in response.iter_content(chunk_size=1024):
+            size = file.write(data)
+            pbar.update(size)
+
+
+def extract_with_progress(tar_path: Path, extract_path: Path):
+    """Extract tar file with progress bar."""
+    with tarfile.open(tar_path, "r:gz") as tar:
+        members = tar.getmembers()
+        with tqdm(desc="Extracting dataset", total=len(members)) as pbar:
+            for member in members:
+                tar.extract(member, path=extract_path)
+                pbar.update(1)
+
+
 class SindushaDataset(TMUDataset):
+    DATASET_URL = "XXXX"
+
     def __init__(
-            self,
-            data_dir: Path,
-            cache_dir: Path,
-            img_size: Tuple[int, int],
-            classes: Dict[str, int],
-            train_percentage: Optional[float] = None,
-            config_convert_to_binary: bool = False,
-            val_split: float = 0.1  # Added validation split parameter
+        self,
+        data_dir: Path,
+        cache_dir: Path,
+        img_size: Tuple[int, int],
+        classes: Dict[str, int],
+        train_percentage: Optional[float] = None,
+        config_convert_to_binary: bool = False,
+        val_split: float = 0.1,
+        download: bool = True,  # Added download parameter
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -33,7 +68,31 @@ class SindushaDataset(TMUDataset):
         self.val_split = val_split
         self.cache_prefix = self.generate_cache_prefix()
         self.config_convert_to_binary = config_convert_to_binary
+
+        if download:
+            self.download_and_extract_if_needed()
         self.check_data_availability()
+
+    def download_and_extract_if_needed(self):
+        """Download and extract the dataset if it doesn't exist."""
+        if self.data_dir.exists() and any(self.data_dir.iterdir()):
+            logger.info(f"Dataset already exists in {self.data_dir}")
+            return
+
+        logger.info(f"Dataset not found in {self.data_dir}. Downloading...")
+        self.data_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Download the dataset
+        tar_path = self.data_dir.parent / "sindusha_dataset.tar.gz"
+        download_with_progress(self.DATASET_URL, tar_path)
+
+        # Extract the dataset
+        logger.info(f"Extracting dataset to {self.data_dir.parent}")
+        extract_with_progress(tar_path, self.data_dir.parent)
+
+        # Clean up
+        tar_path.unlink()
+        logger.info("Dataset download and extraction completed")
 
     def generate_cache_prefix(self) -> str:
         """Generate a unique cache prefix based on the dataset parameters."""
@@ -48,7 +107,7 @@ class SindushaDataset(TMUDataset):
                 f"Expected location: {self.data_dir}."
             )
 
-        for split in ['train', 'test']:  # Only check train and test
+        for split in ["train", "test"]:  # Only check train and test
             split_dir = self.data_dir / split
             if not split_dir.exists():
                 raise SindushaDatasetError(
@@ -67,8 +126,8 @@ class SindushaDataset(TMUDataset):
                     )
 
     def _retrieve_dataset(self) -> Dict[str, np.ndarray]:
-        train_data = self._load_or_process_data('train')
-        test_data = self._load_or_process_data('test')
+        train_data = self._load_or_process_data("train")
+        test_data = self._load_or_process_data("test")
 
         # Split training data into train and validation
         if self.val_split > 0:
@@ -89,16 +148,16 @@ class SindushaDataset(TMUDataset):
             y_val = np.empty(0, dtype=np.uint32)
 
         return {
-            'x_train': x_train,
-            'y_train': y_train,
-            'x_val': x_val,
-            'y_val': y_val,
-            'x_test': test_data[0],
-            'y_test': test_data[1]
+            "x_train": x_train,
+            "y_train": y_train,
+            "x_val": x_val,
+            "y_val": y_val,
+            "x_test": test_data[0],
+            "y_test": test_data[1],
         }
 
     def _transform(self, name: str, dataset: np.ndarray) -> np.ndarray:
-        if name.startswith('y'):
+        if name.startswith("y"):
             return dataset.astype(np.uint32)
 
         if self.config_convert_to_binary:
@@ -107,12 +166,12 @@ class SindushaDataset(TMUDataset):
         return dataset
 
     def _load_or_process_data(self, split: str):
-        cache_file_x = self.cache_dir / f'{self.cache_prefix}_{split}_data_x.npy'
-        cache_file_y = self.cache_dir / f'{self.cache_prefix}_{split}_data_y.npy'
+        cache_file_x = self.cache_dir / f"{self.cache_prefix}_{split}_data_x.npy"
+        cache_file_y = self.cache_dir / f"{self.cache_prefix}_{split}_data_y.npy"
 
         if cache_file_x.exists() and cache_file_y.exists():
             logger.info(f"Loading cached data from {cache_file_x} and {cache_file_y}")
-            with cache_file_x.open('rb') as fx, cache_file_y.open('rb') as fy:
+            with cache_file_x.open("rb") as fx, cache_file_y.open("rb") as fy:
                 x = np.load(fx)
                 y = np.load(fy)
         else:
@@ -120,16 +179,18 @@ class SindushaDataset(TMUDataset):
             x, y = self._load_and_preprocess_data(self.data_dir / split)
 
             logger.info(f"Saving processed data to {cache_file_x} and {cache_file_y}")
-            with cache_file_x.open('wb') as fx, cache_file_y.open('wb') as fy:
+            with cache_file_x.open("wb") as fx, cache_file_y.open("wb") as fy:
                 np.save(fx, x)
                 np.save(fy, y)
 
-        if split == 'train' and self.train_percentage is not None:
+        if split == "train" and self.train_percentage is not None:
             num_samples = int(len(x) * self.train_percentage)
             indices = random.sample(range(len(x)), num_samples)
             x = x[indices]
             y = y[indices]
-            logger.info(f"Using {self.train_percentage * 100}% of training data: {len(x)} samples")
+            logger.info(
+                f"Using {self.train_percentage * 100}% of training data: {len(x)} samples"
+            )
 
         return x, y
 
@@ -137,7 +198,9 @@ class SindushaDataset(TMUDataset):
         x, y = [], []
         for class_name, label in self.classes.items():
             class_dir = data_dir / class_name
-            for img_path in tqdm(list(class_dir.glob('*')), desc=f"Loading {class_name}"):
+            for img_path in tqdm(
+                list(class_dir.glob("*")), desc=f"Loading {class_name}"
+            ):
                 img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
                 if img is None:
                     logger.warning(f"Failed to load image: {img_path}")
@@ -159,7 +222,9 @@ class SindushaDataset(TMUDataset):
     def convert_to_binary(x_images):
         binary_images = []
         for image in x_images:
-            threshold = threshold_otsu(image.squeeze())  # Remove the channel dimension for Otsu
+            threshold = threshold_otsu(
+                image.squeeze()
+            )  # Remove the channel dimension for Otsu
             binary = (image > threshold).astype(np.uint32)
             binary_images.append(binary)
         return np.array(binary_images)

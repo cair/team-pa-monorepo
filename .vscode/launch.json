@@ -22,6 +22,21 @@
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/sindusha/tm_composite_nkom/src/tmu_code:${workspaceFolder}/sindusha/tm_composite_nkom/src:${env:PYTHONPATH}"
             }
+        },
+        {
+            "name": "Setup TMU Runner",
+            "type": "python",
+            "request": "launch",
+            "program": "-m",
+            "args": [
+                "pip",
+                "install",
+                "-e",
+                "${workspaceFolder}/sindusha/tm_composite_nkom/src/tmu_code"
+            ],
+            "console": "integratedTerminal",
+            "preLaunchTask": "Clone and Setup TMU",
+            "justMyCode": true
         }
     ]
 }

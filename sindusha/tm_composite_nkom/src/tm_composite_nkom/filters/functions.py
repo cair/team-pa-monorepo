@@ -9,8 +9,8 @@ from skimage.morphology import skeletonize
 from skimage.transform import hough_line, hough_line_peaks
 
 
-
 from tmu.composite.components.base import TMComponent
+
 
 class ImagePreprocessor(ABC):
     @abstractmethod
@@ -23,10 +23,30 @@ class ImagePreprocessor(ABC):
         elif images.ndim == 3:
             return images
         else:
-            raise ValueError("Input must be a 3D array with shape (batch, width, height) or a 4D array with shape (batch, width, height, 1)")
+            raise ValueError(
+                "Input must be a 3D array with shape (batch, width, height) or a 4D array with shape (batch, width, height, 1)"
+            )
+
+    def _normalize_to_uint8(self, image):
+        """Convert image to uint8 format required by OpenCV."""
+        if image.dtype != np.uint8:
+            # First convert to float64 to handle uint32 values
+            image_float = image.astype(np.float64)
+
+            # Normalize to 0-1 range
+            image_normalized = (image_float - image_float.min()) / (
+                image_float.max() - image_float.min()
+            )
+
+            # Scale to 0-255 range and convert to uint8
+            image_uint8 = (image_normalized * 255).astype(np.uint8)
+
+            return image_uint8
+        return image
 
     def __str__(self):
         return self.__class__.__name__
+
 
 class CompositePreprocessor(ImagePreprocessor):
     def __init__(self, preprocessors):
@@ -38,7 +58,10 @@ class CompositePreprocessor(ImagePreprocessor):
         return images
 
     def __str__(self):
-        return f"{self.__class__.__name__}_{'_'.join(str(p) for p in self.preprocessors)}"
+        return (
+            f"{self.__class__.__name__}_{'_'.join(str(p) for p in self.preprocessors)}"
+        )
+
 
 class FlexibleComponent(TMComponent):
     def __init__(self, model_cls, model_config, preprocessor, **kwargs):
@@ -64,6 +87,7 @@ class FlexibleComponent(TMComponent):
     def __str__(self):
         return f"{self.preprocessor}"  # {self.__class__.__name__}_
 
+
 # We're testing this to see if orienting spectral-temporal patterns differently
 # improves feature detection. Tsetlin Machines might benefit from seeing these
 # patterns from various angles, potentially uncovering discriminative features
@@ -77,7 +101,14 @@ class RotationPreprocessor(ImagePreprocessor):
             return images
         rotated_images = []
         for image in images:
-            rotated = rotate(image, self.rotation_angle, reshape=False, order=1, mode='constant', cval=0)
+            rotated = rotate(
+                image,
+                self.rotation_angle,
+                reshape=False,
+                order=1,
+                mode="constant",
+                cval=0,
+            )
             threshold = threshold_otsu(rotated)
             binary = (rotated > threshold).astype(np.uint8)
             rotated_images.append(binary)
@@ -85,6 +116,7 @@ class RotationPreprocessor(ImagePreprocessor):
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.rotation_angle}"
+
 
 # This preprocessor is being evaluated to determine if a binary representation
 # of spectrograms enhances the Tsetlin Machine's ability to distinguish between
@@ -99,66 +131,94 @@ class OtsuThresholdingPreprocessor(ImagePreprocessor):
             binary_images.append(binary)
         return np.array(binary_images)
 
+
 # We're testing this to assess whether local adaptive thresholding can better
 # capture varying intensity patterns across different frequency bands and time
 # periods in spectrograms, potentially providing more nuanced input for the
 # Tsetlin Machine.
 class AdaptiveThresholdingPreprocessor(ImagePreprocessor):
+    """
+    Input: uint32 array of shape (batch, height, width) or (batch, height, width, 1)
+    Output: uint8 binary array of shape (batch, height, width)
+    """
+
     def __init__(self, block_size=11, C=2):
         self.block_size = block_size
         self.C = C
 
     def process(self, images):
+        images = self._ensure_3d(images)
         processed_images = []
         for image in images:
-            binary = cv2.adaptiveThreshold(image, 1, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                           cv2.THRESH_BINARY, self.block_size, self.C)
+            # Convert to uint8 (required by OpenCV)
+            image_uint8 = cv2.normalize(
+                image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U
+            )
+            binary = cv2.adaptiveThreshold(
+                image_uint8,
+                1,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                self.block_size,
+                self.C,
+            )
             processed_images.append(binary)
         return np.array(processed_images)
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.block_size}_{self.C}"
 
+
 # This is being evaluated to see if emphasizing spectro-temporal boundaries
 # in the input helps the Tsetlin Machine identify key transitions in the audio
 # signal, which could be crucial for distinguishing between different classes.
 class CannyEdgePreprocessor(ImagePreprocessor):
-    def __init__(self, low_threshold=100, high_threshold=200):
+    """
+    Input: uint32 array of shape (batch, height, width) or (batch, height, width, 1)
+    Output: uint8 binary array of shape (batch, height, width)
+    """
+
+    def __init__(self, low_threshold=50, high_threshold=150):
         self.low_threshold = low_threshold
         self.high_threshold = high_threshold
 
     def process(self, images):
-        processed_images = []
+        edge_images = []
         for image in images:
+            # Convert to uint8
+            image = self._normalize_to_uint8(image)
             edges = cv2.Canny(image, self.low_threshold, self.high_threshold)
-            binary = (edges > 0).astype(np.uint8)
-            processed_images.append(binary)
-        return np.array(processed_images)
+            edge_images.append(edges)
+        return np.array(edge_images)
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.low_threshold}_{self.high_threshold}"
+
 
 # We're testing this to determine if enhancing the contrast in spectrograms
 # allows the Tsetlin Machine to better recognize subtle patterns that might
 # be significant for classification but are not prominent in the original image.
 class HistogramEqualizationPreprocessor(ImagePreprocessor):
     def process(self, images):
-        processed_images = []
+        equalized_images = []
         for image in images:
+            # Convert to uint8
+            image = self._normalize_to_uint8(image)
             equalized = cv2.equalizeHist(image)
             threshold = threshold_otsu(equalized)
             binary = (equalized > threshold).astype(np.uint8)
-            processed_images.append(binary)
-        return np.array(processed_images)
+            equalized_images.append(binary)
+        return np.array(equalized_images)
 
     def __str__(self):
         return f"{self.__class__.__name__}"
+
 
 # This preprocessor is being evaluated to see if cleaning up noise and filling
 # small gaps in the spectrogram creates more coherent regions, potentially
 # making it easier for the Tsetlin Machine to identify consistent patterns.
 class MorphologicalPreprocessor(ImagePreprocessor):
-    def __init__(self, operation='open', kernel_size=5):
+    def __init__(self, operation="open", kernel_size=5):
         self.operation = operation
         self.kernel_size = kernel_size
         self.kernel = np.ones((kernel_size, kernel_size), np.uint8)
@@ -168,15 +228,16 @@ class MorphologicalPreprocessor(ImagePreprocessor):
         for image in images:
             threshold = threshold_otsu(image)
             binary = (image > threshold).astype(np.uint8)
-            if self.operation == 'open':
+            if self.operation == "open":
                 processed = cv2.morphologyEx(binary, cv2.MORPH_OPEN, self.kernel)
-            elif self.operation == 'close':
+            elif self.operation == "close":
                 processed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, self.kernel)
             processed_images.append(processed)
         return np.array(processed_images)
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.operation}_{self.kernel_size}"
+
 
 # We're testing this to assess whether smoothing out short-term variations
 # helps the Tsetlin Machine focus on more stable, longer-term patterns in
@@ -189,6 +250,8 @@ class GaussianBlurPreprocessor(ImagePreprocessor):
     def process(self, images):
         blurred_images = []
         for image in images:
+            # Convert to uint8
+            image = self._normalize_to_uint8(image)
             blurred = cv2.GaussianBlur(image, self.kernel_size, self.sigma)
             threshold = threshold_otsu(blurred)
             binary = (blurred > threshold).astype(np.uint8)
@@ -198,26 +261,51 @@ class GaussianBlurPreprocessor(ImagePreprocessor):
     def __str__(self):
         return f"{self.__class__.__name__}_{self.kernel_size}_{self.sigma}"
 
+
 # This is being evaluated to see if highlighting rapid changes in frequency
 # content over time provides the Tsetlin Machine with valuable information
 # about onsets, offsets, and transitions in the audio signal.
 class SobelEdgePreprocessor(ImagePreprocessor):
+    """
+    Input: uint32 array of shape (batch, height, width) or (batch, height, width, 1)
+    Output: uint8 binary array of shape (batch, height, width)
+    """
+
     def __init__(self, ksize=3):
         self.ksize = ksize
 
     def process(self, images):
+        images = self._ensure_3d(images)
         edge_images = []
         for image in images:
-            sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=self.ksize)
-            sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=self.ksize)
-            edge = np.sqrt(sobelx**2 + sobely**2)
-            threshold = threshold_otsu(edge)
-            binary = (edge > threshold).astype(np.uint8)
+            # Convert to uint8 first
+            image_uint8 = self._normalize_to_uint8(image)
+
+            # Apply Sobel in x and y directions
+            sobelx = cv2.Sobel(image_uint8, cv2.CV_64F, 1, 0, ksize=self.ksize)
+            sobely = cv2.Sobel(image_uint8, cv2.CV_64F, 0, 1, ksize=self.ksize)
+
+            # Calculate magnitude
+            magnitude = np.sqrt(sobelx**2 + sobely**2)
+
+            # Normalize magnitude to 0-255 range
+            magnitude_norm = (
+                (magnitude - magnitude.min())
+                / (magnitude.max() - magnitude.min())
+                * 255
+            )
+            magnitude_uint8 = magnitude_norm.astype(np.uint8)
+
+            # Apply threshold
+            threshold = threshold_otsu(magnitude_uint8)
+            binary = (magnitude_uint8 > threshold).astype(np.uint8)
+
             edge_images.append(binary)
         return np.array(edge_images)
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.ksize}"
+
 
 # We're testing this to determine if detecting areas of rapid intensity change
 # in all directions of the spectrogram provides a comprehensive view of the
@@ -229,15 +317,31 @@ class LaplacianEdgePreprocessor(ImagePreprocessor):
     def process(self, images):
         edge_images = []
         for image in images:
-            laplacian = cv2.Laplacian(image, cv2.CV_64F, ksize=self.ksize)
-            laplacian = np.uint8(np.absolute(laplacian))
-            threshold = threshold_otsu(laplacian)
-            binary = (laplacian > threshold).astype(np.uint8)
+            # Convert to uint8 first
+            image_uint8 = self._normalize_to_uint8(image)
+
+            # Apply Laplacian
+            laplacian = cv2.Laplacian(image_uint8, cv2.CV_64F, ksize=self.ksize)
+
+            # Take absolute value and normalize
+            abs_laplacian = np.abs(laplacian)
+            laplacian_norm = (
+                (abs_laplacian - abs_laplacian.min())
+                / (abs_laplacian.max() - abs_laplacian.min())
+                * 255
+            )
+            laplacian_uint8 = laplacian_norm.astype(np.uint8)
+
+            # Apply threshold
+            threshold = threshold_otsu(laplacian_uint8)
+            binary = (laplacian_uint8 > threshold).astype(np.uint8)
+
             edge_images.append(binary)
         return np.array(edge_images)
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.ksize}"
+
 
 # This preprocessor is being evaluated to see if smoothing the spectrogram
 # while preserving edges helps reduce noise without losing important
@@ -252,7 +356,11 @@ class BilateralFilterPreprocessor(ImagePreprocessor):
     def process(self, images):
         filtered_images = []
         for image in images:
-            filtered = cv2.bilateralFilter(image, self.d, self.sigmaColor, self.sigmaSpace)
+            # Convert to uint8
+            image = self._normalize_to_uint8(image)
+            filtered = cv2.bilateralFilter(
+                image, self.d, self.sigmaColor, self.sigmaSpace
+            )
             threshold = threshold_otsu(filtered)
             binary = (filtered > threshold).astype(np.uint8)
             filtered_images.append(binary)
@@ -260,6 +368,7 @@ class BilateralFilterPreprocessor(ImagePreprocessor):
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.d}_{self.sigmaColor}_{self.sigmaSpace}"
+
 
 # We're testing this to assess whether applying thresholding to different
 # frequency bands separately allows the Tsetlin Machine to better focus on
@@ -289,6 +398,7 @@ class FrequencyBandThresholdingPreprocessor(ImagePreprocessor):
     def __str__(self):
         return f"{self.__class__.__name__}_{self.num_bands}"
 
+
 # This is being evaluated to see if highlighting the most prominent frequencies
 # at each moment helps the Tsetlin Machine identify characteristic harmonic
 # structures or dominant tones that are key to distinguishing between classes.
@@ -309,7 +419,7 @@ class PeakDetectionPreprocessor(ImagePreprocessor):
     def _detect_peaks(self, x, min_distance):
         peaks = []
         for i in range(1, len(x) - 1):
-            if x[i-1] < x[i] and x[i] > x[i+1]:
+            if x[i - 1] < x[i] and x[i] > x[i + 1]:
                 peaks.append(i)
 
         # Apply minimum distance
@@ -321,6 +431,7 @@ class PeakDetectionPreprocessor(ImagePreprocessor):
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.min_distance}"
+
 
 # We're testing this to determine if making the differences between high-energy
 # and low-energy components more pronounced helps the Tsetlin Machine distinguish
@@ -340,6 +451,7 @@ class SpectralContrastEnhancementPreprocessor(ImagePreprocessor):
     def __str__(self):
         return f"{self.__class__.__name__}_{self.percentile}"
 
+
 # This preprocessor is being evaluated to see if highlighting boundaries in
 # both time and frequency dimensions helps the Tsetlin Machine identify key
 # events and transitions in the audio signal that are crucial for classification.
@@ -357,6 +469,7 @@ class TimeFrequencyEdgeDetectionPreprocessor(ImagePreprocessor):
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.sigma}"
+
 
 # We're testing this to assess whether emphasizing harmonic structures in the
 # spectrogram provides the Tsetlin Machine with strong features for distinguishing
@@ -379,14 +492,17 @@ class HarmonicStructureEnhancementPreprocessor(ImagePreprocessor):
 
             line_image = np.zeros_like(image, dtype=np.uint8)
             for angle, dist in lines:
-                y0, y1 = (dist - 0 * np.cos(angle)) / np.sin(angle), (dist - image.shape[1] * np.cos(angle)) / np.sin(angle)
-                line_image[int(y0):int(y1), :] = 1
+                y0, y1 = (dist - 0 * np.cos(angle)) / np.sin(angle), (
+                    dist - image.shape[1] * np.cos(angle)
+                ) / np.sin(angle)
+                line_image[int(y0) : int(y1), :] = 1
 
             enhanced_images.append(line_image)
         return np.array(enhanced_images)
 
     def __str__(self):
         return f"{self.__class__.__name__}_{self.min_angle}_{self.max_angle}"
+
 
 # This is being evaluated to see if combining adaptive thresholding with
 # skeletonization helps highlight core spectro-temporal patterns while
@@ -400,7 +516,9 @@ class AdaptiveThresholdingWithSkeletonizationPreprocessor(ImagePreprocessor):
     def process(self, images):
         processed_images = []
         for image in images:
-            threshold = threshold_local(image, block_size=self.block_size, offset=self.offset)
+            threshold = threshold_local(
+                image, block_size=self.block_size, offset=self.offset
+            )
             binary = (image > threshold).astype(np.uint8)
             skeleton = skeletonize(binary)
             processed_images.append(skeleton.astype(np.uint8))
